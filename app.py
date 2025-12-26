@@ -248,9 +248,9 @@ try:
 
                     # --- [쪽수 표시] 1페이지 ---
                     # (좌표를 PDF 양식에 맞춰 조절해주세요)
-                    y_page = 50       # 바닥에서 얼마나 띄울지
-                    x_p1 = 280        # 왼쪽 괄호 ( 1 ) 안의 좌표
-                    x_p2 = 320        # 오른쪽 괄호 ( 2 ) 안의 좌표
+                    y_page = 70       # 바닥에서 얼마나 띄울지
+                    x_p1 = 240        # 왼쪽 괄호 ( 1 ) 안의 좌표
+                    x_p2 = 290        # 오른쪽 괄호 ( 2 ) 안의 좌표
                     
                     can.drawCentredString(x_p1, y_page, "1")
                     can.drawCentredString(x_p2, y_page, str(total_pages))
