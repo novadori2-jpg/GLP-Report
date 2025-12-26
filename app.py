@@ -8,7 +8,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.utils import ImageReader
 from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle
+from reportlab.platypus import Table, TableStyle, Image  # [수정] Image 추가
 from pypdf import PdfReader, PdfWriter
 import io
 
@@ -20,7 +20,7 @@ st.title("🖨️ GLP 어류순화기록서(F01) 통합 출력 시스템")
 @st.cache_resource
 def get_google_services():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    # st.secrets에서 정보 읽기 (배포용)
+    # 배포용 (st.secrets 사용)
     creds_dict = st.secrets["gcp_service_account"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     client = gspread.authorize(creds)
@@ -49,17 +49,14 @@ try:
     client, drive_service = get_google_services()
     sh = client.open("어류급성독성시험시트") 
     
-    # [1] 기록 데이터 로드
     ws_log = sh.worksheet("[F01] 어류순화기록서") 
     df_log = pd.DataFrame(ws_log.get_all_records()).fillna("")
 
-    # [2] 마감 정보 로드
     try:
         ws_close = sh.worksheet("[F01] 마감정보")
         df_close = pd.DataFrame(ws_close.get_all_records()).fillna("")
     except: df_close = pd.DataFrame() 
 
-    # [3] 정정 기록 로드 (★추가된 부분)
     try:
         ws_audit = sh.worksheet("[F01] 정정기록")
         df_audit = pd.DataFrame(ws_audit.get_all_records()).fillna("")
@@ -69,8 +66,6 @@ try:
 
     if not df_log.empty:
         test_ids = df_log['시험번호'].unique()
-        
-        # URL 파라미터 처리
         query_params = st.query_params
         target_id = query_params.get("id", None)
         
@@ -82,14 +77,14 @@ try:
             selected_test = st.selectbox("출력할 시험번호 선택", test_ids)
         
         if selected_test:
-            # 1. 기록 데이터 필터링
+            # 1. 기록 데이터
             filtered_df = df_log[df_log['시험번호'] == selected_test]
             try:
                 filtered_df['일차_정렬용'] = pd.to_numeric(filtered_df['일차'])
                 filtered_df = filtered_df.sort_values(by='일차_정렬용')
             except: filtered_df = filtered_df.sort_values(by='일차')
 
-            # 2. 마감 정보 찾기
+            # 2. 마감 정보
             close_info = {}
             if not df_close.empty:
                 try:
@@ -99,39 +94,35 @@ try:
                     if not closing_row.empty: close_info = closing_row.iloc[-1]
                 except: pass
 
-            # 3. 정정 기록 찾기 (★추가된 부분)
+            # 3. 정정 기록 (Audit Trail)
             audit_records = pd.DataFrame()
             if not df_audit.empty:
                 try:
                     df_audit['시험번호_str'] = df_audit['시험번호'].astype(str).str.strip()
                     audit_records = df_audit[df_audit['시험번호_str'] == str(selected_test).strip()]
-                    # 날짜순 정렬
                     if not audit_records.empty:
                          audit_records = audit_records.sort_values(by='정정일시')
                 except: pass
 
-            # 화면에 데이터 표시
             st.dataframe(filtered_df)
             
-            with st.expander(f"📝 정정 기록 (Audit Trail) 확인: 총 {len(audit_records)}건"):
+            # [디버깅] 화면에 정정 기록이 있는지 먼저 보여줌
+            with st.expander(f"📝 정정 기록 데이터 확인 ({len(audit_records)}건)"):
                 if not audit_records.empty:
                     st.dataframe(audit_records)
                 else:
-                    st.caption("수정 이력이 없습니다.")
-            
+                    st.warning("이 시험번호에 대한 정정 기록이 없습니다. (PDF 2페이지 생성 안 됨)")
+
             st.divider()
 
             if st.button("📄 통합 PDF 생성하기", type="primary"):
                 try:
                     pdfmetrics.registerFont(TTFont('Malgun', 'malgun.ttf'))
                     packet = io.BytesIO()
-                    # 1페이지 캔버스 시작
                     can = canvas.Canvas(packet, pagesize=(595.27, 841.89))
                     can.setFont('Malgun', 10)
 
-                    # ==========================================
-                    # [PAGE 1] 메인 기록서 (기존 코드 유지)
-                    # ==========================================
+                    # === [PAGE 1] 메인 기록서 ===
                     header_row = filtered_df.iloc[0]
                     can.drawString(485, 749, str(header_row.get('시험년도', ''))) 
                     can.drawString(125, 725, str(header_row['시험번호']))
@@ -150,7 +141,7 @@ try:
                     elif "미꾸리" in species: can.drawString(432, 682, "V")
                     can.setFont('Malgun', 10)
 
-                    # 표 데이터 입력
+                    # 표 데이터
                     start_y = 593; row_height = 21.5   
                     x_day=71; x_date=105; x_feed=145; x_dead=181; x_count=218; 
                     x_temp=260; x_ph=300; x_do=339; x_water=374.5; x_note=395; x_sign=500
@@ -250,41 +241,37 @@ try:
                         can.drawString(x_m_date, y_manager, "(마감 전)")
                         can.setFont('Malgun', 10)
 
-                    can.showPage() # 1페이지 종료 및 저장
+                    # [페이지 넘김] 1페이지 끝
+                    can.showPage() 
 
-                    # ==========================================
-                    # [PAGE 2] Audit Trail (정정 기록 별지)
-                    # ==========================================
+                    # === [PAGE 2] Audit Trail (정정 기록 별지) ===
                     if not audit_records.empty:
-                        # 별지 제목
                         can.setFont('Malgun', 14)
                         can.drawString(50, 800, "첨부. 정정 기록 보고서 (Audit Trail Report)")
                         
                         can.setFont('Malgun', 10)
                         can.drawString(50, 775, f"시험번호: {selected_test}")
-                        can.line(50, 770, 545, 770) # 구분선
+                        can.line(50, 770, 545, 770)
 
-                        # 테이블 데이터 준비
-                        # 헤더: 일시 / 일차 / 항목 / 변경 전 / 변경 후 / 사유 / 정정자
                         table_data = [['일시', '일차', '항목', '변경 전', '변경 후', '사유', '정정자', '서명']]
                         
                         for _, row in audit_records.iterrows():
                             old_val = str(row.get('변경전_값', '')).replace("['','']", "").strip("[]', ")
                             new_val = str(row.get('변경후_값', '')).replace("['','']", "").strip("[]', ")
                             
-                            # 정정자 서명 이미지 처리
                             sign_cell = ""
                             sign_path = str(row.get('정정자_서명', '')).strip()
+                            
+                            # [수정] 표 전용 이미지 객체 (platypus.Image) 사용
                             if sign_path:
                                 img_data = download_image_from_drive(drive_service, sign_path)
                                 if img_data:
                                     try:
-                                        # ReportLab 테이블용 이미지 객체 (너비 40, 높이 20으로 제한)
-                                        sign_cell = ImageReader(img_data)
+                                        # 이미지 크기를 강제로 지정 (너비 40, 높이 20)
+                                        sign_cell = Image(img_data, width=40, height=20)
                                     except: pass
                             
-                            # 서명 이미지가 없으면 텍스트로 대체 (안전장치)
-                            if not sign_cell: sign_cell = "(서명없음)"
+                            if not sign_cell: sign_cell = ""
 
                             table_data.append([
                                 str(row['정정일시'])[:16],
@@ -297,45 +284,41 @@ try:
                                 sign_cell
                             ])
 
-                        # 테이블 스타일 설정
-                        # 너비 조절 (총합 약 500 정도 되게)
+                        # 스타일
                         col_widths = [95, 30, 50, 80, 80, 80, 45, 45]
                         t = Table(table_data, colWidths=col_widths)
                         
-                        # 스타일: 격자무늬, 헤더 배경색, 정렬 등
                         style_list = [
-                            ('FONT', (0, 0), (-1, -1), 'Malgun', 8), # 글자 크기 8
-                            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey), # 격자 테두리
-                            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey), # 헤더 배경
-                            ('ALIGN', (0, 0), (-1, -1), 'CENTER'), # 가운데 정렬
-                            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), # 세로 가운데
-                            # 변경 전/후, 사유는 내용이 많을 수 있으니 자동 줄바꿈을 위해 폰트 조정
+                            ('FONT', (0, 0), (-1, -1), 'Malgun', 8),
+                            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
                             ('FONT', (3, 1), (5, -1), 'Malgun', 7),
                         ]
                         t.setStyle(TableStyle(style_list))
                         
-                        # 테이블 그리기 (위치 잡기)
-                        # wrapOn으로 크기 계산 후 drawOn으로 그리기
+                        # 테이블 그리기
                         w, h = t.wrapOn(can, 50, 50) 
-                        # y좌표: 제목 아래(750)에서 테이블 높이만큼 뺀 위치부터 시작
                         t.drawOn(can, 50, 750 - h)
 
-                    can.save() # 2페이지까지 저장 완료
+                    # [저장]
+                    can.save()
 
-                    # ==========================================
-                    # PDF 병합 (기존 템플릿 + 새로 만든 1,2페이지)
-                    # ==========================================
+                    # === 병합 로직 ===
                     packet.seek(0)
                     new_pdf = PdfReader(packet)
                     existing_pdf = PdfReader(open("ECT-001-F01-01_어류순화기록서.pdf", "rb"))
                     output = PdfWriter()
                     
-                    # 1. 원본 양식(1페이지) + 데이터(New PDF 1페이지) 병합
+                    # 1페이지 병합
                     page1 = existing_pdf.pages[0]
-                    page1.merge_page(new_pdf.pages[0])
+                    # new_pdf의 1페이지(기록서)를 합침
+                    if len(new_pdf.pages) > 0:
+                        page1.merge_page(new_pdf.pages[0])
                     output.add_page(page1)
 
-                    # 2. 정정기록(New PDF 2페이지)이 있다면 그냥 추가 (별지니까)
+                    # 2페이지 추가 (Audit Trail이 있는 경우에만)
                     if len(new_pdf.pages) > 1:
                         output.add_page(new_pdf.pages[1])
 
