@@ -8,7 +8,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.utils import ImageReader
 from reportlab.lib import colors
-# [수정] 줄바꿈(Paragraph)과 스타일(ParagraphStyle) 기능 추가
+# [중요] Paragraph, ParagraphStyle 사용
 from reportlab.platypus import Table, TableStyle, Image, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from pypdf import PdfReader, PdfWriter
@@ -122,7 +122,7 @@ try:
                     can = canvas.Canvas(packet, pagesize=(595.27, 841.89))
                     can.setFont('Malgun', 10)
 
-                    # [페이지 계산] 정정기록이 있으면 총 2페이지, 없으면 1페이지
+                    # 페이지 수 계산
                     total_pages = 2 if not audit_records.empty else 1
 
                     # ==========================================
@@ -246,11 +246,11 @@ try:
                         can.drawString(x_m_date, y_manager, "(마감 전)")
                         can.setFont('Malgun', 10)
 
-                    # --- [쪽수 표시] 1페이지 ---
-                    # (좌표를 PDF 양식에 맞춰 조절해주세요)
-                    y_page = 50       # 바닥에서 얼마나 띄울지
-                    x_p1 = 280        # 왼쪽 괄호 ( 1 ) 안의 좌표
-                    x_p2 = 330        # 오른쪽 괄호 ( 2 ) 안의 좌표
+                    # [쪽수 표시] 1페이지
+                    # (양식에 맞게 x, y 값을 조절하세요)
+                    y_page = 50       
+                    x_p1 = 280        
+                    x_p2 = 320        
                     
                     can.drawCentredString(x_p1, y_page, "1")
                     can.drawCentredString(x_p2, y_page, str(total_pages))
@@ -268,20 +268,21 @@ try:
                         can.drawString(50, 775, f"시험번호: {selected_test}")
                         can.line(50, 770, 545, 770)
 
-                        # [스타일 설정] 줄바꿈을 위한 ParagraphStyle 정의
+                        # [스타일] 줄바꿈용
                         styles = getSampleStyleSheet()
-                        # 한글 폰트 적용된 셀 스타일
-                        style_cell = ParagraphStyle(name='KoreanCell', parent=styles['Normal'], fontName='Malgun', fontSize=8, leading=10, alignment=1) # alignment=1 (Center)
+                        style_cell = ParagraphStyle(name='KoreanCell', parent=styles['Normal'], fontName='Malgun', fontSize=8, leading=10, alignment=1)
 
                         table_data = [['일시', '일차', '항목', '변경 전', '변경 후', '사유', '정정자', '서명']]
                         
                         for _, row in audit_records.iterrows():
-                            # 텍스트가 길 경우를 대비해 Paragraph로 감싸기
+                            # 텍스트 데이터 준비
                             old_val_txt = str(row.get('변경전_값', '')).replace("['','']", "").strip("[]', ")
                             new_val_txt = str(row.get('변경후_값', '')).replace("['','']", "").strip("[]', ")
                             reason_txt = str(row['정정사유'])
+                            item_txt = str(row.get('항목', '-')) # 항목 텍스트
 
-                            # Paragraph 객체 생성 (자동 줄바꿈 됨)
+                            # [수정] 항목(item_txt)도 Paragraph로 변환 -> 줄바꿈 적용
+                            p_item = Paragraph(item_txt, style_cell)
                             p_old = Paragraph(old_val_txt, style_cell)
                             p_new = Paragraph(new_val_txt, style_cell)
                             p_reason = Paragraph(reason_txt, style_cell)
@@ -300,10 +301,10 @@ try:
                             table_data.append([
                                 str(row['정정일시'])[:16],
                                 str(row['일차']),
-                                str(row.get('항목', '-')),
-                                p_old,    # Paragraph 객체 넣음
-                                p_new,    # Paragraph 객체 넣음
-                                p_reason, # Paragraph 객체 넣음
+                                p_item,   # Paragraph 적용됨
+                                p_old,    # Paragraph 적용됨
+                                p_new,    # Paragraph 적용됨
+                                p_reason, # Paragraph 적용됨
                                 str(row['정정자']),
                                 sign_cell
                             ])
@@ -323,15 +324,14 @@ try:
                         w, h = t.wrapOn(can, 50, 50) 
                         t.drawOn(can, 50, 750 - h)
 
-                        # --- [쪽수 표시] 2페이지 ---
+                        # [쪽수 표시] 2페이지
                         can.setFont('Malgun', 10)
-                        # 2페이지가 있으면 쪽수는 무조건 "2 / 2" 겠죠?
                         can.drawCentredString(x_p1, y_page, "2")
                         can.drawCentredString(x_p2, y_page, str(total_pages))
 
                     can.save()
 
-                    # === 병합 로직 ===
+                    # === 병합 및 다운로드 ===
                     packet.seek(0)
                     new_pdf = PdfReader(packet)
                     existing_pdf = PdfReader(open("ECT-001-F01-01_어류순화기록서.pdf", "rb"))
