@@ -120,7 +120,7 @@ try:
 
                     # [A] 헤더 정보 입력
                     header_row = filtered_df.iloc[0]
-                    can.drawString(485, 749, str(header_row.get('년도', ''))) 
+                    can.drawString(485, 749, str(header_row.get('시험년도', ''))) 
                     can.drawString(125, 725, str(header_row['시험번호']))
                     can.drawString(125, 670, str(header_row.get('순화장소', '')))
                     can.drawString(310, 660, str(header_row.get('관리번호', '')))
