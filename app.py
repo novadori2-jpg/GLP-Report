@@ -8,7 +8,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.utils import ImageReader
 from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle, Image  # [수정] Image 추가
+# [수정] 줄바꿈(Paragraph)과 스타일(ParagraphStyle) 기능 추가
+from reportlab.platypus import Table, TableStyle, Image, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from pypdf import PdfReader, PdfWriter
 import io
 
@@ -20,7 +22,6 @@ st.title("🖨️ GLP 어류순화기록서(F01) 통합 출력 시스템")
 @st.cache_resource
 def get_google_services():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    # 배포용 (st.secrets 사용)
     creds_dict = st.secrets["gcp_service_account"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     client = gspread.authorize(creds)
@@ -106,12 +107,11 @@ try:
 
             st.dataframe(filtered_df)
             
-            # [디버깅] 화면에 정정 기록이 있는지 먼저 보여줌
             with st.expander(f"📝 정정 기록 데이터 확인 ({len(audit_records)}건)"):
                 if not audit_records.empty:
                     st.dataframe(audit_records)
                 else:
-                    st.warning("이 시험번호에 대한 정정 기록이 없습니다. (PDF 2페이지 생성 안 됨)")
+                    st.caption("이 시험번호에 대한 정정 기록이 없습니다.")
 
             st.divider()
 
@@ -122,7 +122,12 @@ try:
                     can = canvas.Canvas(packet, pagesize=(595.27, 841.89))
                     can.setFont('Malgun', 10)
 
-                    # === [PAGE 1] 메인 기록서 ===
+                    # [페이지 계산] 정정기록이 있으면 총 2페이지, 없으면 1페이지
+                    total_pages = 2 if not audit_records.empty else 1
+
+                    # ==========================================
+                    # [PAGE 1] 메인 기록서
+                    # ==========================================
                     header_row = filtered_df.iloc[0]
                     can.drawString(485, 749, str(header_row.get('시험년도', ''))) 
                     can.drawString(125, 725, str(header_row['시험번호']))
@@ -241,10 +246,20 @@ try:
                         can.drawString(x_m_date, y_manager, "(마감 전)")
                         can.setFont('Malgun', 10)
 
-                    # [페이지 넘김] 1페이지 끝
+                    # --- [쪽수 표시] 1페이지 ---
+                    # (좌표를 PDF 양식에 맞춰 조절해주세요)
+                    y_page = 50       # 바닥에서 얼마나 띄울지
+                    x_p1 = 280        # 왼쪽 괄호 ( 1 ) 안의 좌표
+                    x_p2 = 320        # 오른쪽 괄호 ( 2 ) 안의 좌표
+                    
+                    can.drawCentredString(x_p1, y_page, "1")
+                    can.drawCentredString(x_p2, y_page, str(total_pages))
+
                     can.showPage() 
 
-                    # === [PAGE 2] Audit Trail (정정 기록 별지) ===
+                    # ==========================================
+                    # [PAGE 2] Audit Trail (정정 기록 별지)
+                    # ==========================================
                     if not audit_records.empty:
                         can.setFont('Malgun', 14)
                         can.drawString(50, 800, "첨부. 정정 기록 보고서 (Audit Trail Report)")
@@ -253,38 +268,46 @@ try:
                         can.drawString(50, 775, f"시험번호: {selected_test}")
                         can.line(50, 770, 545, 770)
 
+                        # [스타일 설정] 줄바꿈을 위한 ParagraphStyle 정의
+                        styles = getSampleStyleSheet()
+                        # 한글 폰트 적용된 셀 스타일
+                        style_cell = ParagraphStyle(name='KoreanCell', parent=styles['Normal'], fontName='Malgun', fontSize=8, leading=10, alignment=1) # alignment=1 (Center)
+
                         table_data = [['일시', '일차', '항목', '변경 전', '변경 후', '사유', '정정자', '서명']]
                         
                         for _, row in audit_records.iterrows():
-                            old_val = str(row.get('변경전_값', '')).replace("['','']", "").strip("[]', ")
-                            new_val = str(row.get('변경후_값', '')).replace("['','']", "").strip("[]', ")
-                            
+                            # 텍스트가 길 경우를 대비해 Paragraph로 감싸기
+                            old_val_txt = str(row.get('변경전_값', '')).replace("['','']", "").strip("[]', ")
+                            new_val_txt = str(row.get('변경후_값', '')).replace("['','']", "").strip("[]', ")
+                            reason_txt = str(row['정정사유'])
+
+                            # Paragraph 객체 생성 (자동 줄바꿈 됨)
+                            p_old = Paragraph(old_val_txt, style_cell)
+                            p_new = Paragraph(new_val_txt, style_cell)
+                            p_reason = Paragraph(reason_txt, style_cell)
+
+                            # 서명 이미지
                             sign_cell = ""
                             sign_path = str(row.get('정정자_서명', '')).strip()
-                            
-                            # [수정] 표 전용 이미지 객체 (platypus.Image) 사용
                             if sign_path:
                                 img_data = download_image_from_drive(drive_service, sign_path)
                                 if img_data:
                                     try:
-                                        # 이미지 크기를 강제로 지정 (너비 40, 높이 20)
                                         sign_cell = Image(img_data, width=40, height=20)
                                     except: pass
-                            
                             if not sign_cell: sign_cell = ""
 
                             table_data.append([
                                 str(row['정정일시'])[:16],
                                 str(row['일차']),
                                 str(row.get('항목', '-')),
-                                old_val,
-                                new_val,
-                                str(row['정정사유']),
+                                p_old,    # Paragraph 객체 넣음
+                                p_new,    # Paragraph 객체 넣음
+                                p_reason, # Paragraph 객체 넣음
                                 str(row['정정자']),
                                 sign_cell
                             ])
 
-                        # 스타일
                         col_widths = [95, 30, 50, 80, 80, 80, 45, 45]
                         t = Table(table_data, colWidths=col_widths)
                         
@@ -294,15 +317,18 @@ try:
                             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
                             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                            ('FONT', (3, 1), (5, -1), 'Malgun', 7),
                         ]
                         t.setStyle(TableStyle(style_list))
                         
-                        # 테이블 그리기
                         w, h = t.wrapOn(can, 50, 50) 
                         t.drawOn(can, 50, 750 - h)
 
-                    # [저장]
+                        # --- [쪽수 표시] 2페이지 ---
+                        can.setFont('Malgun', 10)
+                        # 2페이지가 있으면 쪽수는 무조건 "2 / 2" 겠죠?
+                        can.drawCentredString(x_p1, y_page, "2")
+                        can.drawCentredString(x_p2, y_page, str(total_pages))
+
                     can.save()
 
                     # === 병합 로직 ===
@@ -311,21 +337,18 @@ try:
                     existing_pdf = PdfReader(open("ECT-001-F01-01_어류순화기록서.pdf", "rb"))
                     output = PdfWriter()
                     
-                    # 1페이지 병합
                     page1 = existing_pdf.pages[0]
-                    # new_pdf의 1페이지(기록서)를 합침
                     if len(new_pdf.pages) > 0:
                         page1.merge_page(new_pdf.pages[0])
                     output.add_page(page1)
 
-                    # 2페이지 추가 (Audit Trail이 있는 경우에만)
                     if len(new_pdf.pages) > 1:
                         output.add_page(new_pdf.pages[1])
 
                     pdf_byte_arr = io.BytesIO()
                     output.write(pdf_byte_arr)
                     
-                    st.success(f"✅ [{selected_test}] PDF 생성 완료! (Audit Trail 포함)")
+                    st.success(f"✅ [{selected_test}] PDF 생성 완료! (Total Pages: {total_pages})")
                     st.download_button("📥 다운로드", pdf_byte_arr.getvalue(), f"Result_{selected_test}.pdf", "application/pdf")
 
                 except Exception as e:
